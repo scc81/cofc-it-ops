@@ -1,0 +1,142 @@
+# /etc/cofc-itip/config.env — TEMPLATE (safe to commit)
+# Real file: sudo install -m 600 -o jarvis -g jarvis config.env /etc/cofc-itip/
+# NEVER commit the real file. NEVER put credentials in code.
+#
+# CREDENTIAL SOURCE (Phase 2): secret values (API keys, passwords, client
+# secrets, the Teams webhook URL) are resolved by tools/secrets.py. If the
+# `lpass` CLI is installed AND logged in, they are read from LastPass items
+# named cofc-itip/<KEY> (password field); otherwise they fall back to the
+# env values below. Non-secret config (URLs, instance names, rate limits)
+# always reads from here. Leaving a secret blank below is fine when LastPass
+# provides it.
+
+# ── Ollama / models (sized for BB: RTX A2000 6GB) ────────────────────────────
+OLLAMA_HOST=http://localhost:11434
+FAST_MODEL=mistral
+PRIMARY_MODEL=llama3:8b
+HEAVY_MODEL=gemma2:9b
+OLLAMA_TIMEOUT=120
+# Session 4: jarvis_core's engines call the LiteLLM proxy (OpenAI-compatible)
+# instead of Ollama/Anthropic directly. The proxy fronts both backends; routing
+# local-vs-external is still decided by the FERPA guard/egress router in core,
+# not by LiteLLM (cross-provider fallback is disabled in litellm_config.yaml).
+LITELLM_HOST=http://localhost:4000
+# Optional. Set to lock the proxy's admin surface before any non-loopback use;
+# also read by litellm_config.yaml (general_settings.master_key) and sent as a
+# bearer token by core's engines if present. Leave blank for loopback-only BB.
+LITELLM_MASTER_KEY=
+
+# ── Storage ──────────────────────────────────────────────────────────────────
+CHROMA_PATH=/var/lib/cofc-itip/chroma
+AUDIT_DB=/var/lib/cofc-itip/audit.db
+
+# ── Egress policy (FERPA firewall) ───────────────────────────────────────────
+# EGRESS_MODE: local = everything on-box (default). auto = respect flags below.
+EGRESS_MODE=local
+EGRESS_INFERENCE=local
+# EGRESS_RESEARCH: local (default) = NO external web research. Set to a non-local
+# value (e.g. 'searxng') to opt into the SearXNG research tool (Session 5). The
+# tools/websearch.py connector self-blocks while this is 'local'.
+EGRESS_RESEARCH=local
+ANTHROPIC_API_KEY=
+ANTHROPIC_MODEL=claude-sonnet-4-6
+BRAVE_SEARCH_API_KEY=
+# SearXNG self-hosted research backend (Session 5). Localhost-only by default;
+# only used when EGRESS_RESEARCH != local. Container publishes 127.0.0.1:8888.
+SEARXNG_HOST=http://localhost:8888
+#SEARXNG_RATE_LIMIT_RPM=30
+#SEARXNG_MAX_RETRIES=3
+#SEARXNG_TIMEOUT=15
+
+# ── Observability (LangFuse, Session 5 — all optional/opt-in) ─────────────────
+# Leave blank to run with observability DISABLED (jarvis_core no-ops cleanly and
+# logs once at startup). Fill in after deploying self-hosted LangFuse and
+# creating a project: copy its public/secret keys here. LangFuse is on-box
+# (same trust boundary as ChromaDB), not an egress destination.
+LANGFUSE_HOST=
+LANGFUSE_PUBLIC_KEY=
+LANGFUSE_SECRET_KEY=
+
+# ── Mock mode ────────────────────────────────────────────────────────────────
+# true = all connectors return synthetic data; no credentials needed.
+JARVIS_MOCK=true
+
+# ── Intune / Microsoft Graph (app registration, client credentials) ──────────
+INTUNE_TENANT_ID=
+INTUNE_CLIENT_ID=
+INTUNE_CLIENT_SECRET=
+INTUNE_MAX_RETRIES=3
+INTUNE_RATE_LIMIT_RPS=8
+
+# ── Jamf Pro (dedicated read-only API account or API client) ─────────────────
+JAMF_URL=https://cofc.jamfcloud.com
+JAMF_USERNAME=
+JAMF_PASSWORD=
+JAMF_MAX_RETRIES=3
+JAMF_RATE_LIMIT_RPM=80
+JAMF_STALE_HOURS=168
+
+# ── Mobile UI + Teams + Package Pipeline (Session 4) ─────────────────────────
+TEAMS_WEBHOOK_URL=                        # incoming webhook on the IT channel
+JARVIS_UI_KEY=                            # python3 -c "import secrets;print(secrets.token_urlsafe(24))"
+JARVIS_CORE_URL=http://127.0.0.1:8081     # core moved off 8080 — UI owns 8080
+JARVIS_UI_BASE=http://BB-IP:8080          # base URL in approval-card links
+PIPELINE_DATA_DIR=/var/lib/cofc-itip/pipeline
+PIPELINE_LIVE_ENABLED=false               # deliberate switch for live MDM writes
+APPROVAL_TIMEOUT_SECONDS=3600
+
+# ── ServiceNow (KB read + ticket/incident/task CRUD) ─────────────────────────
+SN_INSTANCE=                              # 'cofc' -> cofc.service-now.com
+SN_USER=
+SN_PASS=
+SN_MAX_RETRIES=3
+SN_RATE_LIMIT_RPM=20
+# Live WRITE gate: must be true for any live (non-mock) ticket create/update.
+# Even when true, each write still requires explicit human confirmation.
+SN_WRITE_ENABLED=false
+
+# ── Taegis SIEM (API key via Alejandro Torres) ───────────────────────────────
+TAEGIS_URL=https://api.ctpx.secureworks.com
+TAEGIS_API_KEY=
+TAEGIS_MAX_RETRIES=3
+TAEGIS_RATE_LIMIT_RPM=30
+
+# ── Teams webhook tuning ─────────────────────────────────────────────────────
+TEAMS_MAX_RETRIES=3
+TEAMS_RATE_LIMIT_RPM=30
+
+# ── Voice pipeline ───────────────────────────────────────────────────────────
+WAKE_WORD_MODEL=hey_jarvis                # Boo Boo Kitty custom model = Phase 2
+WAKE_THRESHOLD=0.5
+WHISPER_MODEL=base.en
+#AUDIO_DEVICE_INDEX=                      # uncomment to pin a specific mic
+
+# ── Briefing trend baselines (until real history lands, Phase 2) ─────────────
+BRIEFING_BASELINE_INTUNE_PCT=90
+BRIEFING_BASELINE_JAMF_PCT=90
+
+# ── Pipeline tuning (defaults are fine; here for completeness) ───────────────
+APPROVAL_POLL_SECONDS=5
+MOCK_APPROVAL_DELAY=2                     # mock-mode simulated approver delay
+#JARVIS_ACTOR=                            # audit-log actor override (defaults to OS user)
+
+# ── Remote access (Session 6 — Tailscale + Caddy reverse proxy) ──────────────
+# This section is INFRA REFERENCE ONLY. None of these are read by JARVIS app
+# code — remote access is networking config, not a runtime egress path, and it
+# does NOT alter the zero-egress posture (EGRESS_* above are unaffected).
+# Credentials for this layer are NEVER stored here:
+#   - Tailscale device auth: done interactively via `sudo tailscale up` (browser
+#     auth) or a manually-provisioned auth key pasted at the CLI. NEVER put a
+#     Tailscale auth key in this file or any committed file.
+#   - Caddy basic-auth: hashes are generated with `caddy hash-password` and live
+#     ONLY in the deployed /etc/caddy/Caddyfile (not the repo copy, not here).
+# The two vars below are non-secret pointers, safe to keep for documentation.
+#
+# BB's Tailscale IP — fill in AFTER `tailscale up` (run: tailscale ip -4). Used
+# only as the bind address in /etc/caddy/Caddyfile; recorded here for reference.
+#BB_TAILSCALE_IP=100.x.y.z
+# Reverse-proxy paths (fixed by config/Caddyfile; here so the access model is
+# discoverable from one place):
+#   leadership (read-only Grafana):  http://<BB_TAILSCALE_IP>/grafana/
+#   techs (full JARVIS query):       http://<BB_TAILSCALE_IP>/jarvis/
+#CADDY_PROXY_NOTE=see config/Caddyfile for routing + the TODO open items

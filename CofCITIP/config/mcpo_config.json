@@ -1,0 +1,20 @@
+{
+  "//": "config/mcpo_config.json — JARVIS (CofCITIP) mcpo proxy, Phase 2 Session 4.",
+  "//format": "mcpo uses Claude-Desktop-format JSON with an 'mcpServers' map. Each key becomes a REST route prefix (here: /jarvis-readonly) with its own /docs and /openapi.json. Chosen JSON (not YAML) because that is mcpo's documented/native config format.",
+  "//correction": "The session prompt assumed mcpo could wrap connector functions (intune.query_compliance, ...) directly. It cannot — mcpo wraps an MCP *server* (a stdio command), not bare Python callables. So this points at tools/mcp_readonly_server.py, a thin FastMCP stdio server that registers those same read-only functions. Net effect is identical (those five tools as REST), done the way mcpo actually works.",
+  "//scope": "READ-ONLY tools ONLY: intune.query_compliance, intune.query_device_detail, jamf.query_fleet, jamf.query_patch_status, servicenow.search_kb. NO write actions (create_ticket/update_ticket/create_incident/package_pipeline/teams.send_approval_request) — those stay behind jarvis_core's human confirmation gate. Do not add write tools to this server.",
+  "//roadmap": "This is the on-ramp to exposing Microsoft Graph / ServiceNow / Teams as proper MCP servers later (Phase 2+). This session just proves the wrapping pattern on tools that already exist. mcpo is bound to loopback/campus LAN and key-protected in the systemd unit — this REST surface carries ops data and must never be off-campus reachable.",
+  "//launch": "mcpo --config /opt/cofc-itip/config/mcpo_config.json --port 8000  ->  routes at http://localhost:8000/jarvis-readonly/<tool>, docs at /jarvis-readonly/docs",
+
+  "mcpServers": {
+    "jarvis-readonly": {
+      "//": "stdio MCP server. cwd is the install dir so `from tools import ...` resolves; JARVIS_CONFIG points the connectors at the live config.env (mock honored). PYTHONPATH set for the same reason.",
+      "command": "python3",
+      "args": ["-m", "tools.mcp_readonly_server"],
+      "env": {
+        "PYTHONPATH": "/opt/cofc-itip",
+        "JARVIS_CONFIG": "/etc/cofc-itip/config.env"
+      }
+    }
+  }
+}

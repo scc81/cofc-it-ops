@@ -1,0 +1,104 @@
+# =============================================================================
+# config/litellm_config.yaml — JARVIS (CofCITIP) LiteLLM proxy
+# =============================================================================
+# Phase 2, Session 4. One OpenAI-compatible endpoint (default :4000) in front
+# of BB-local Ollama AND the Claude API. jarvis_core.py's OllamaEngine /
+# AnthropicEngine now talk to THIS proxy instead of calling Ollama's native API
+# or api.anthropic.com directly — so when Node 2 comes online it's a config
+# edit here, not a jarvis_core.py rewrite.
+#
+# ── ZERO-EGRESS / FERPA (non-negotiable) ─────────────────────────────────────
+# This proxy does NOT decide local-vs-external. That decision is made upstream
+# by the FERPA guard + EgressRouter in jarvis_core.py BEFORE an engine is
+# chosen. The proxy only routes the model name it is handed:
+#   - OllamaEngine asks for an ollama/* model_name  -> stays on BB, never egress
+#   - AnthropicEngine asks for claude-sonnet-4-6     -> only ever requested when
+#     the egress router already cleared it (non-ops research query)
+# CROSS-PROVIDER FALLBACK IS DISABLED ON PURPOSE (see router_settings below):
+# if a local model errors, LiteLLM must NOT silently fail over to Claude — that
+# would route ops data off-box around the firewall. A local failure stays a
+# local failure; jarvis_core's existing degrade-gracefully paths handle it.
+#
+# ── RETRY OWNERSHIP ──────────────────────────────────────────────────────────
+# num_retries is deliberately 0 here. jarvis_core.py's connectors already own
+# retry + circuit-breaking via tenacity/pybreaker; a second retry layer in the
+# proxy would multiply attempts (3 x 3 = 9) and mask breaker state. One layer,
+# one owner. The proxy's job is routing + a single attempt, nothing more.
+#
+# ── SECRETS ──────────────────────────────────────────────────────────────────
+# No credentials in this file. The Anthropic key resolves at proxy start from
+# the ANTHROPIC_API_KEY env var (os.environ/...). LiteLLM's own admin master
+# key likewise comes from LITELLM_MASTER_KEY in the environment (set in
+# config.env / the systemd unit's EnvironmentFile), never hardcoded.
+# =============================================================================
+
+model_list:
+  # ── Local Ollama models on BB (ollama_chat/* = chat completions endpoint) ──
+  # api_base reads OLLAMA_HOST from the environment so prod and dev agree with
+  # config.env. These never leave the box.
+  - model_name: mistral
+    litellm_params:
+      model: ollama_chat/mistral
+      api_base: os.environ/OLLAMA_HOST
+      timeout: 120          # matches OLLAMA_TIMEOUT default in config.env
+      num_retries: 0        # retry owned by jarvis_core (tenacity/pybreaker)
+
+  - model_name: llama3:8b
+    litellm_params:
+      model: ollama_chat/llama3:8b
+      api_base: os.environ/OLLAMA_HOST
+      timeout: 120
+      num_retries: 0
+
+  - model_name: gemma2:9b
+    litellm_params:
+      model: ollama_chat/gemma2:9b
+      api_base: os.environ/OLLAMA_HOST
+      timeout: 120
+      num_retries: 0
+
+  # nomic-embed-text is an EMBEDDING model. It is exposed here for completeness
+  # / future routing, but note: embedding.py talks to Ollama directly for
+  # ChromaDB (it must stay on-box and is on the hot RAG path), so this entry is
+  # not yet wired into jarvis_core — documented so a later embedding-via-proxy
+  # move is a one-line engine change, not a surprise.
+  - model_name: nomic-embed-text
+    litellm_params:
+      model: ollama/nomic-embed-text
+      api_base: os.environ/OLLAMA_HOST
+      timeout: 120
+      num_retries: 0
+
+  # ── External Claude (egress) — only requested post-FERPA-clearance ─────────
+  # Key from env, never hardcoded. Same retry rule: proxy does a single attempt.
+  - model_name: claude-sonnet-4-6
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+      timeout: 30           # matches the 30s egress timeout in AnthropicEngine
+      num_retries: 0
+
+# ── ROUTER SETTINGS — fallbacks OFF (the firewall point) ─────────────────────
+router_settings:
+  # Empty fallback maps = NO automatic cross-provider failover. This is the
+  # structural guarantee that a local model error can never silently promote a
+  # query to Claude. The routing decision lives in jarvis_core, not here.
+  fallbacks: []
+  context_window_fallbacks: []
+  content_policy_fallbacks: []
+  num_retries: 0            # proxy-level retry off; jarvis_core owns it
+  allowed_fails: 0
+  routing_strategy: simple-shuffle
+
+# ── LITELLM SETTINGS ─────────────────────────────────────────────────────────
+litellm_settings:
+  drop_params: true         # tolerate engine kwargs a given backend ignores
+  set_verbose: false        # structlog/journald is the log path, not stdout spam
+  request_timeout: 120      # global ceiling; per-model timeouts above are tighter
+
+# ── GENERAL SETTINGS ─────────────────────────────────────────────────────────
+general_settings:
+  # Admin/master key from env only. With it unset the proxy still serves on
+  # loopback for BB-local engines; set LITELLM_MASTER_KEY in config.env to lock
+  # the admin surface down before any non-loopback exposure.
+  master_key: os.environ/LITELLM_MASTER_KEY

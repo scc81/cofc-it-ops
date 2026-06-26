@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<!--
+ui/index.html — JARVIS Mobile PWA
+CofCITIP — single file, zero dependencies, zero egress.
+Served by ui/jarvis_ui.py at http://<BB-IP>:8080
+Tabs: BRIEF (auto-refresh 5 min) · QUERY (last 5 in-session) · STATUS
+API key: prompted once, sessionStorage only (cleared when tab closes).
+PWA: /manifest.json + /sw.js served by the backend (service workers must
+load from same-origin URLs); apple-* meta tags cover iOS Add to Home Screen.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="JARVIS">
+<meta name="theme-color" content="#0a0f0d">
+<link rel="manifest" href="/manifest.json">
+<title>JARVIS — CofC IT Ops</title>
+<style>
+  :root{
+    --bg:#0a0f0d; --panel:#10171a; --panel2:#16201f; --line:#1f2e2a;
+    --teal:#2dd4a8; --teal-dim:#1a8f73; --green:#9ef0c8; --text:#d7e6df;
+    --muted:#6f8a80; --red:#ff6b6b; --amber:#ffc861;
+    --safe-b:env(safe-area-inset-bottom,0px);
+  }
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%}
+  body{background:var(--bg);color:var(--text);
+       font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       display:flex;flex-direction:column;overflow:hidden}
+
+  header{padding:14px 18px 10px;border-bottom:1px solid var(--line);
+         display:flex;align-items:center;gap:10px;flex:0 0 auto}
+  .orb{width:12px;height:12px;border-radius:50%;background:var(--teal);
+       box-shadow:0 0 10px var(--teal);animation:pulse 2.4s infinite}
+  .orb.down{background:var(--red);box-shadow:0 0 10px var(--red)}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+  header h1{font-size:18px;letter-spacing:.22em;color:var(--green);font-weight:600}
+  header small{color:var(--muted);margin-left:auto;font-size:11px;letter-spacing:.08em}
+
+  main{flex:1 1 auto;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:16px}
+  .view{display:none;max-width:680px;margin:0 auto}
+  .view.active{display:block}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+        padding:14px 16px;margin-bottom:12px}
+  .card h2{font-size:12px;letter-spacing:.18em;color:var(--teal);
+           text-transform:uppercase;margin-bottom:10px}
+  .row{display:flex;justify-content:space-between;padding:4px 0;font-size:15px}
+  .row .k{color:var(--muted)} .row .v{font-variant-numeric:tabular-nums}
+  .big{font-size:30px;font-weight:600;color:var(--green)}
+  .sev-critical{color:var(--red);font-weight:600}
+  .sev-high{color:var(--amber);font-weight:600}
+  .sev-medium{color:var(--teal)}
+  .note{color:var(--muted);font-size:13px;margin-top:6px}
+  .err{background:#241316;border-color:#4a2a2e;color:#ffb4b4}
+  .stamp{color:var(--muted);font-size:12px;text-align:center;margin:4px 0 10px}
+
+  /* QUERY view */
+  .qbox{display:flex;gap:8px;margin-bottom:14px}
+  .qbox input{flex:1;background:var(--panel2);border:1px solid var(--line);
+              border-radius:12px;color:var(--text);padding:12px 14px;font-size:16px;outline:none}
+  .qbox input:focus{border-color:var(--teal-dim)}
+  .qbox button{background:var(--teal);color:#06231b;border:0;border-radius:12px;
+               padding:0 18px;font-size:15px;font-weight:700;letter-spacing:.04em}
+  .qbox button:disabled{opacity:.5}
+  .bubble-q{background:var(--panel2);border:1px solid var(--line);border-radius:12px 12px 12px 4px;
+            padding:10px 14px;margin:10px 0 4px;color:var(--green);font-size:14px}
+  .bubble-a{background:var(--panel);border:1px solid var(--line);border-radius:4px 12px 12px 12px;
+            padding:12px 14px;margin-bottom:12px;white-space:pre-wrap}
+  .spin{display:inline-block;width:16px;height:16px;border:2px solid var(--teal-dim);
+        border-top-color:var(--teal);border-radius:50%;animation:rot .8s linear infinite;vertical-align:-3px}
+  @keyframes rot{to{transform:rotate(360deg)}}
+
+  nav{flex:0 0 auto;display:flex;border-top:1px solid var(--line);
+      background:var(--panel);padding-bottom:var(--safe-b)}
+  nav button{flex:1;background:none;border:0;color:var(--muted);padding:12px 0 10px;
+             font-size:11px;letter-spacing:.16em;font-weight:600}
+  nav button .ic{display:block;font-size:20px;margin-bottom:2px}
+  nav button.on{color:var(--teal)}
+
+  /* key gate overlay */
+  #gate{position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;
+        align-items:center;justify-content:center;gap:16px;padding:24px;z-index:10}
+  #gate h1{color:var(--green);letter-spacing:.25em;font-size:22px}
+  #gate p{color:var(--muted);font-size:14px;text-align:center;max-width:300px}
+  #gate input{background:var(--panel2);border:1px solid var(--line);border-radius:12px;
+              color:var(--text);padding:13px 16px;font-size:16px;width:min(320px,86vw);
+              text-align:center;letter-spacing:.1em;outline:none}
+  #gate button{background:var(--teal);color:#06231b;border:0;border-radius:12px;
+               padding:13px 36px;font-size:15px;font-weight:700;letter-spacing:.08em}
+  #gateErr{color:var(--red);font-size:13px;min-height:18px}
+</style>
+</head>
+<body>
+
+<div id="gate">
+  <h1>J A R V I S</h1>
+  <p>College of Charleston IT Operations.<br>Enter the access key to continue.</p>
+  <input id="gateKey" type="password" inputmode="text" autocomplete="off"
+         placeholder="access key" autofocus>
+  <div id="gateErr"></div>
+  <button onclick="unlock()">CONNECT</button>
+</div>
+
+<header>
+  <div class="orb" id="orb"></div>
+  <h1>JARVIS</h1>
+  <small id="hdrModel"></small>
+</header>
+
+<main>
+  <!-- BRIEF -->
+  <section class="view active" id="view-brief">
+    <div class="stamp" id="briefStamp">loading briefing…</div>
+    <div id="briefCards"></div>
+  </section>
+
+  <!-- QUERY -->
+  <section class="view" id="view-query">
+    <div class="qbox">
+      <input id="qIn" placeholder="Ask JARVIS…" autocomplete="off"
+             onkeydown="if(event.key==='Enter')ask()">
+      <button id="qBtn" onclick="ask()">ASK</button>
+    </div>
+    <div id="qHist"></div>
+  </section>
+
+  <!-- STATUS -->
+  <section class="view" id="view-status">
+    <div class="card">
+      <h2>System Status</h2>
+      <div id="statusBody"><span class="spin"></span> checking…</div>
+    </div>
+    <p class="note" style="text-align:center">BB · Ubuntu 24.04 · zero-egress ·
+       all inference on-box</p>
+  </section>
+</main>
+
+<nav>
+  <button class="on" data-v="brief" onclick="tab('brief')"><span class="ic">☀️</span>BRIEF</button>
+  <button data-v="query" onclick="tab('query')"><span class="ic">💬</span>QUERY</button>
+  <button data-v="status" onclick="tab('status')"><span class="ic">📡</span>STATUS</button>
+</nav>
+
+<script>
+"use strict";
+/* ── key handling: sessionStorage ONLY (spec) — cleared when tab closes ── */
+const KEY_NAME = "jarvis_key";
+const getKey = () => sessionStorage.getItem(KEY_NAME) || "";
+
+function unlock(){
+  const v = document.getElementById("gateKey").value.trim();
+  if(!v){ document.getElementById("gateErr").textContent = "Key required."; return; }
+  sessionStorage.setItem(KEY_NAME, v);
+  // verify against a key-protected route before dropping the gate
+  api("/briefing").then(()=>{ document.getElementById("gate").style.display="none"; boot(); })
+    .catch(e=>{
+      if(e.status===401){ sessionStorage.removeItem(KEY_NAME);
+        document.getElementById("gateErr").textContent="Key rejected — try again."; }
+      else { // server reachable problems shouldn't lock the user out of STATUS
+        document.getElementById("gate").style.display="none"; boot();
+      }
+    });
+}
+if(getKey()){ document.getElementById("gate").style.display="none"; }
+
+/* ── tiny fetch wrapper with key header + friendly errors ── */
+async function api(path, opts={}){
+  let r;
+  try{
+    r = await fetch(path, {...opts, headers:{
+      "Content-Type":"application/json", "X-JARVIS-KEY":getKey(),
+      ...(opts.headers||{}) }});
+  }catch(_){ const e=new Error("unreachable"); e.status=0; throw e; }
+  if(!r.ok){ const e=new Error("http "+r.status); e.status=r.status; throw e; }
+  return r.json();
+}
+const friendly = e =>
+  e.status===0   ? "Can't reach BB — are you on the campus network?" :
+  e.status===401 ? "Access key rejected. Reload the page to re-enter it." :
+  e.status===502 ? "JARVIS core is offline — UI is up but inference isn't." :
+                   "Something went wrong (" + e.status + ").";
+
+/* ── tabs ── */
+function tab(name){
+  document.querySelectorAll(".view").forEach(v=>v.classList.remove("active"));
+  document.getElementById("view-"+name).classList.add("active");
+  document.querySelectorAll("nav button").forEach(b=>
+    b.classList.toggle("on", b.dataset.v===name));
+  if(name==="status") refreshStatus();
+}
+
+/* ── BRIEF view ── */
+const esc = s => String(s??"").replace(/[&<>"']/g,
+  c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+function row(k,v,cls){ return `<div class="row"><span class="k">${esc(k)}</span>
+  <span class="v ${cls||""}">${esc(v)}</span></div>`; }
+
+function renderBrief(b){
+  const fh=b.fleet_health||{}, pb=fh.platform_breakdown||{},
+        cs=b.compliance_summary||{}, oa=b.overnight_alerts||{},
+        ps=b.patch_status||{};
+  let h="";
+  h+=`<div class="card"><h2>Fleet Health</h2>
+      <div class="big">${esc(fh.total??"–")}</div>
+      <div class="note">managed devices</div>
+      ${row("Windows / Mac",(pb.windows??0)+" / "+(pb.mac??0))}
+      ${row("Non-compliant",fh.non_compliant??0,(fh.non_compliant>0?"sev-high":""))}
+      ${row("Stale Macs",pb.mac_stale??0)}</div>`;
+  h+=`<div class="card"><h2>Compliance</h2>
+      ${row("Intune",(cs.intune_pct??0)+"%")}
+      ${row("Jamf",(cs.jamf_pct??0)+"%")}
+      ${row("Trend",cs.trend??"–")}</div>`;
+  h+=`<div class="card"><h2>Overnight Alerts</h2>
+      ${row("Critical",oa.critical??0,(oa.critical>0?"sev-critical":""))}
+      ${row("High",oa.high??0,(oa.high>0?"sev-high":""))}
+      ${row("Medium",oa.medium??0,"sev-medium")}`;
+  (oa.top_3||[]).forEach(t=>{
+    h+=`<div class="note">• [${esc(t.severity)}] ${esc(t.title)} — ${esc(t.host)}</div>`;});
+  h+=`</div>`;
+  h+=`<div class="card"><h2>Patch Status</h2>
+      ${row("Titles below 90%",ps.pending??0,(ps.pending>0?"sev-high":""))}
+      ${row("Up to date",ps.up_to_date??0)}
+      ${ps.worst_title?row("Worst",ps.worst_title+" ("+(ps.worst_pct??"?")+"%)"):""}</div>`;
+  document.getElementById("briefCards").innerHTML=h;
+  document.getElementById("briefStamp").textContent=
+    "generated "+new Date(b.generated_at).toLocaleTimeString()+(b.mock?" · mock data":"");
+}
+async function refreshBrief(){
+  try{ renderBrief(await api("/briefing")); }
+  catch(e){
+    document.getElementById("briefStamp").textContent="";
+    document.getElementById("briefCards").innerHTML=
+      `<div class="card err">${esc(friendly(e))}</div>`;
+  }
+}
+
+/* ── QUERY view — last 5 kept in memory only (not stored) ── */
+const hist=[];
+function renderHist(){
+  document.getElementById("qHist").innerHTML = hist.map(h=>
+    `<div class="bubble-q">${esc(h.q)}</div>
+     <div class="bubble-a">${h.pending?'<span class="spin"></span> thinking…':esc(h.a)}</div>`
+  ).join("");
+}
+async function ask(){
+  const inp=document.getElementById("qIn"), btn=document.getElementById("qBtn");
+  const text=inp.value.trim(); if(!text)return;
+  inp.value=""; btn.disabled=true;
+  const item={q:text,a:"",pending:true};
+  hist.unshift(item); if(hist.length>5)hist.pop(); renderHist();
+  try{ const r=await api("/query",{method:"POST",body:JSON.stringify({text})});
+       item.a=r.response; }
+  catch(e){ item.a=friendly(e); }
+  item.pending=false; btn.disabled=false; renderHist();
+}
+
+/* ── STATUS view + header orb ── */
+async function refreshStatus(){
+  const el=document.getElementById("statusBody"), orb=document.getElementById("orb");
+  try{
+    const r=await fetch("/health"); const s=await r.json();
+    orb.classList.toggle("down", s.core!=="ok");
+    document.getElementById("hdrModel").textContent=s.model||"";
+    el.innerHTML = row("UI status",s.status)
+      + row("Core",s.core,(s.core==="ok"?"":"sev-critical"))
+      + row("Uptime",s.uptime)
+      + row("Model",s.model)
+      + row("Mode",s.mock_mode?"mock":"live");
+  }catch(_){
+    orb.classList.add("down");
+    el.innerHTML=`<div class="err card" style="margin:0">Can't reach BB — are you
+      on the campus network?</div>`;
+  }
+}
+
+/* ── boot ── */
+let briefTimer=null;
+function boot(){
+  refreshBrief(); refreshStatus();
+  if(briefTimer)clearInterval(briefTimer);
+  briefTimer=setInterval(refreshBrief, 5*60*1000);   // auto-refresh 5 min
+  setInterval(refreshStatus, 60*1000);
+}
+if(getKey()) boot();
+
+/* ── PWA: register the stub service worker (served by backend) ── */
+if("serviceWorker" in navigator){
+  navigator.serviceWorker.register("/sw.js").catch(()=>{});
+}
+</script>
+</body>
+</html>

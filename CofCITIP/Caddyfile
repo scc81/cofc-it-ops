@@ -1,0 +1,144 @@
+# =============================================================================
+# config/Caddyfile — CofCITIP / JARVIS reverse proxy (Session 6)
+# =============================================================================
+# Role-based remote access for BB over the Tailscale tailnet.
+#
+#   /grafana/*  -> localhost:3000  (Grafana)   gated by "leadership" basic-auth
+#   /jarvis/*   -> localhost:8080  (jarvis-ui) gated by "techs" basic-auth
+#
+# WHY CADDY (vs Nginx): automatic-HTTPS-off-by-default for a bare IP, trivial
+# basicauth directive, single small file. The swap to Nginx later is mechanical
+# (each handle_path -> location, reverse_proxy -> proxy_pass, basicauth ->
+# auth_basic + htpasswd). Chosen for proof-of-concept speed, not lock-in.
+#
+# -----------------------------------------------------------------------------
+# THIS REPO COPY IS A TEMPLATE. The DEPLOYED copy at /etc/caddy/Caddyfile must
+# differ in exactly two ways, both done BY HAND on BB (never committed):
+#   1. The site address below: replace the bind placeholder with BB's Tailscale
+#      IP (run: tailscale ip -4).
+#   2. The two `basicauth` blocks: replace the PLACEHOLDER hashes with real ones
+#      from:  caddy hash-password
+# The installer (section (t)) deploys this file ONLY if /etc/caddy/Caddyfile is
+# absent, so it never clobbers your real hashes on a rerun.
+# =============================================================================
+
+# ── SITE ADDRESS / BIND ──────────────────────────────────────────────────────
+# Bind ONLY to BB's Tailscale interface, NEVER 0.0.0.0 — BB sits on a publicly
+# routable campus network and the loopback services behind this proxy carry ops
+# data. Two ways to pin this; use ONE.
+#
+#   (A) bind by IP (simplest, recommended): put BB's tailnet IP literally as the
+#       site address. Caddy then listens on that IP only.
+#         use the literal IP as the site address (the http://...:80 line below).
+#         Replace 100.x.y.z with the output of `tailscale ip -4`.
+#
+#   (B) bind by interface name: keep an explicit address but add a `bind`
+#       directive to the listener. Caddy can't resolve "tailscale0" to an IP on
+#       its own, so (A) is cleaner. Prefer (A) unless the tailnet IP is unstable.
+#
+# TODO(Steven): replace the placeholder below with BB's real Tailscale IP.
+# Using http:// (port 80) on the tailnet: traffic is already inside the
+# WireGuard tunnel (encrypted hop-by-hop by Tailscale), and Caddy can't get a
+# public ACME cert for a 100.x.y.z address anyway. If you want TLS on top later,
+# Tailscale can issue certs for the *.ts.net MagicDNS name — see TODO at bottom.
+
+http://BB-TAILSCALE-IP-REPLACE-ME:80 {
+
+	# ── /grafana -> leadership (read-only) ───────────────────────────────────
+	# handle_path strips the /grafana prefix before proxying so Grafana sees "/".
+	# Grafana must be told it's served under /grafana (root_url + serve_from_sub_
+	# _path) or its internal links break — see TODO below.
+	handle_path /grafana/* {
+		basicauth {
+			# "leadership" account — Zack, Sasan, Joe, Philip share this read-only
+			# credential. PLACEHOLDER HASH — generate the real one with:
+			#   caddy hash-password
+			# and paste it here in the DEPLOYED file only. The string below is an
+			# obvious non-secret placeholder and will NOT authenticate anyone.
+			leadership REPLACE_WITH_CADDY_HASH_PASSWORD_OUTPUT_LEADERSHIP
+		}
+		reverse_proxy localhost:3000
+	}
+
+	# ── /jarvis -> techs (full query) ────────────────────────────────────────
+	handle_path /jarvis/* {
+		basicauth {
+			# "techs" account — Greg, Mitch, Matt. DIFFERENT credential set from
+			# leadership. PLACEHOLDER HASH — generate with `caddy hash-password`
+			# and paste into the DEPLOYED file only.
+			techs REPLACE_WITH_CADDY_HASH_PASSWORD_OUTPUT_TECHS
+		}
+		# jarvis-ui still enforces its own X-JARVIS-KEY header on data routes
+		# (/query, /briefing) — that's the existing second layer and is fine.
+		# Caddy's basicauth is the PRIMARY remote-access gate; we are NOT adding
+		# a third layer (per session scope).
+		#
+		# NOTE on header forwarding: Caddy's reverse_proxy sets X-Forwarded-For
+		# automatically. jarvis_ui.py's private-network gate reads
+		# request.client.host, which will be 127.0.0.1 (Caddy is on loopback) and
+		# is correctly allowed. jarvis_ui does NOT currently trust X-Forwarded-For
+		# for its gate, which is the safe choice here — do NOT change it to honor
+		# XFF unless a future requirement needs the real client IP, because a
+		# spoofable XFF would weaken the private-net gate.
+		reverse_proxy localhost:8080
+	}
+
+	# ── default: deny everything else ────────────────────────────────────────
+	# No catch-all proxy. Any path that isn't /grafana/* or /jarvis/* gets a flat
+	# 404 from Caddy and never touches a backend. This is deliberate: it prevents
+	# someone on the tailnet from reaching, e.g., /metrics or a future route by
+	# guessing a path. Loopback services are reachable ONLY via the two handles
+	# above, each behind its own basic-auth.
+	respond "Not found" 404
+}
+
+# =============================================================================
+# OPEN ITEMS — do NOT mark this session's proxy "ready for Zack/Sasan" until
+# these are resolved. Caddy fronting localhost does NOT by itself hide the
+# backends from the tailnet; a tailnet member can still hit BB:3000 / BB:3001 /
+# BB:8080 directly unless the backends are loopback-bound or blocked by ACL.
+# =============================================================================
+#
+# TODO(1) — Grafana sub-path + read-only role:
+#   Grafana's apt package listens on 0.0.0.0:3000 by default, so over the
+#   tailnet it is ALSO reachable directly at http://<BB-tailnet-ip>:3000,
+#   BYPASSING this proxy's leadership basic-auth. Two things to do:
+#     a. In /etc/grafana/grafana.ini set:
+#          [server] http_addr = 127.0.0.1     # loopback-only; only Caddy reaches it
+#          [server] root_url = %(protocol)s://%(domain)s/grafana/
+#          [server] serve_from_sub_path = true
+#        then: sudo systemctl restart grafana-server
+#        (http_addr=127.0.0.1 is what actually closes the direct-access hole;
+#        the root_url/sub_path settings just fix link rewriting under /grafana.)
+#     b. Make the leadership view truly read-only: set the default/anonymous
+#        org role to Viewer in grafana.ini:
+#          [users] viewers_can_edit = false
+#          [auth.anonymous] enabled = true
+#          [auth.anonymous] org_role = Viewer
+#        so even an authenticated leadership session cannot edit dashboards.
+#   These edits are Grafana config, not Caddy — left as TODO here rather than
+#   scripted, because an unvalidated grafana.ini edit is a footgun and is out
+#   of this session's "infra/networking config" scope.
+#
+# TODO(2) — close direct backend reachability on the tailnet:
+#   jarvis-ui binds 0.0.0.0:8080 and Uptime Kuma publishes 0.0.0.0:3001, so both
+#   are directly reachable at BB's tailnet IP, bypassing Caddy. jarvis-ui is
+#   acceptable (its own X-JARVIS-KEY + private-net gate still apply, and the
+#   tailnet is RFC6598 100.64/10 which its gate does NOT treat as private, so a
+#   tailnet client hitting :8080 DIRECTLY is actually REJECTED by Layer 1 —
+#   verify this is true on BB before relying on it). Kuma has no auth by default.
+#   Pick ONE of:
+#     a. Tailscale ACLs: restrict the tailnet so only ports 80 (Caddy) is
+#        reachable on BB from the leadership/tech tagged devices. Cleanest.
+#     b. Bind Kuma to loopback (re-run its container with -p 127.0.0.1:3001:3001)
+#        and confirm jarvis-ui's Layer-1 gate rejects 100.64/10 as intended.
+#   Decide and document before go-live. This is the single most important
+#   open item — Caddy's basic-auth means nothing if the backends answer on a
+#   side door.
+#
+# TODO(3) — optional TLS via Tailscale MagicDNS:
+#   If you want https:// instead of http:// on the tailnet, enable HTTPS +
+#   MagicDNS in the Tailscale admin console, then change the site address to
+#   the machine's bb.<tailnet>.ts.net name and let Tailscale provision the cert
+#   (`tailscale cert`). Not required for a working PoC — the WireGuard tunnel
+#   already encrypts transport. Documented, not done.

@@ -1,0 +1,39 @@
+# ── CREDENTIALS — never commit these ──────────────────────
+config.env
+.env
+*.env
+!*.env.template
+!*.env.example
+
+# ── PYTHON ────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+venv/
+.venv/
+env/
+
+# ── RUNTIME DATA (lives on BB, not in repo) ───────────────
+chroma/
+*.db
+*.sqlite
+*.sqlite3
+logs/
+*.log
+
+# ── OS JUNK ───────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── EDITOR ────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── MISC ──────────────────────────────────────────────────
+*.tmp
+*.bak
+node_modules/
