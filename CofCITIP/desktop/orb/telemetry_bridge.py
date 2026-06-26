@@ -69,6 +69,17 @@ class TelemetryBridge(QObject):
                                  one binding source for measured AND presentation
                                  state; written by main.py's demo timer now and by
                                  jarvis-core (voice/inference triggers) later.
+      tokensPerSec float        inference throughput of the active model, set FROM
+                                 Python (not measured here). NOTHING populates this
+                                 yet — no jarvis-core completion hook exists. It
+                                 stays 0.0 until a future session calls
+                                 set_tokens_per_sec() on each inference. Exposed now
+                                 so the StressPanel (Session G) has a real binding
+                                 target instead of a fabricated placeholder.
+      activeModel  str          name of the model tokensPerSec refers to (e.g.
+                                 "mistral", "llama3"). Same posture as tokensPerSec:
+                                 set FROM Python by a future jarvis-core hook,
+                                 empty "" until then.
     """
 
     gpuLoadChanged = Signal()
@@ -76,6 +87,8 @@ class TelemetryBridge(QObject):
     cpuLoadChanged = Signal()
     cpuSpilloverChanged = Signal()
     orbStateChanged = Signal()
+    tokensPerSecChanged = Signal()
+    activeModelChanged = Signal()
 
     def __init__(self, poll_interval_ms: int = 1000, parent: QObject | None = None):
         super().__init__(parent)
@@ -86,6 +99,11 @@ class TelemetryBridge(QObject):
         self._cpu_spillover: bool = False
         # Presentation state, not telemetry — set from Python (see class docstring).
         self._orb_state: int = 0
+        # Inference throughput, set from Python — NOT measured by this bridge and
+        # NOT yet populated by anything. Stays at the defaults below until a future
+        # jarvis-core completion hook calls set_tokens_per_sec()/set_active_model().
+        self._tokens_per_sec: float = 0.0
+        self._active_model: str = ""
 
         # Rolling CPU samples for the spillover baseline.
         self._cpu_history: list[float] = []
@@ -224,6 +242,29 @@ class TelemetryBridge(QObject):
             self._orb_state = iv
             self.orbStateChanged.emit()
 
+    def set_tokens_per_sec(self, v: float) -> None:
+        """Set the active model's inference throughput. For a FUTURE jarvis-core
+        completion hook to call — nothing in the current tree calls this, so the
+        property reads 0.0 in this session."""
+        self._set_tokens_per_sec(v)
+
+    def _set_tokens_per_sec(self, v: float) -> None:
+        fv = float(v)
+        if fv != self._tokens_per_sec:
+            self._tokens_per_sec = fv
+            self.tokensPerSecChanged.emit()
+
+    def set_active_model(self, v: str) -> None:
+        """Set the model name tokensPerSec refers to. Same future-hook posture as
+        set_tokens_per_sec — unwired this session."""
+        self._set_active_model(v)
+
+    def _set_active_model(self, v: str) -> None:
+        sv = str(v)
+        if sv != self._active_model:
+            self._active_model = sv
+            self.activeModelChanged.emit()
+
     # ── Qt Properties (QML-bindable) ──────────────────────────────────────────
     @Property(float, notify=gpuLoadChanged)
     def gpuLoad(self) -> float:
@@ -248,6 +289,22 @@ class TelemetryBridge(QObject):
     @orbState.setter
     def orbState(self, v: int) -> None:
         self._set_orb_state(v)
+
+    @Property(float, notify=tokensPerSecChanged)
+    def tokensPerSec(self) -> float:
+        return self._tokens_per_sec
+
+    @tokensPerSec.setter
+    def tokensPerSec(self, v: float) -> None:
+        self._set_tokens_per_sec(v)
+
+    @Property(str, notify=activeModelChanged)
+    def activeModel(self) -> str:
+        return self._active_model
+
+    @activeModel.setter
+    def activeModel(self, v: str) -> None:
+        self._set_active_model(v)
 
 
 # ── MANUAL SMOKE TEST ─────────────────────────────────────────────────────────
