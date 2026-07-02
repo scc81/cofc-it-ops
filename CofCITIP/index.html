@@ -1,9 +1,24 @@
 <!DOCTYPE html>
 <!--
-ui/index.html — JARVIS Mobile PWA
+ui/index.html — JARVIS Web UI (PWA)
 CofCITIP — single file, zero dependencies, zero egress.
 Served by ui/jarvis_ui.py at http://<BB-IP>:8080
-Tabs: BRIEF (auto-refresh 5 min) · QUERY (last 5 in-session) · STATUS
+
+Nav (Phase 4 Session 3): 8 pages — Brief, Query, Compliance, Lifecycle,
+Coverage Gaps, Threat Intel, Gate, Status. Persistent sidebar >=768px,
+hamburger slide-in below. Brief/Query/Compliance/Status are real;
+Lifecycle is real as of Session 4 (os_readiness engine over the merge);
+Coverage Gaps + Threat Intel are real as of Session 5 (gaps derived
+frontend-side from the merge's sources_present/staleness fields; threat
+reads tools/taegis.py directly). Gate is real as of Session 6 (pending
+Stage-4 approvals via /gate/pending, decisions via POST /gate/decision —
+web front door to the same gate the Teams card uses). Session 6 also adds
+click-to-talk voice on the Query page (browser-native Web Speech API,
+feeds the existing ask() path; no backend or desktop-voice involvement).
+Palette stays teal-primary; CofC maroon #660000 / gold #BFA87C are accent
+touches only (brand mark, active-item bar). Warning states remain
+off-palette red/amber so an alert never reads as branding.
+
 API key: prompted once, sessionStorage only (cleared when tab closes).
 PWA: /manifest.json + /sw.js served by the backend (service workers must
 load from same-origin URLs); apple-* meta tags cover iOS Add to Home Screen.
@@ -23,6 +38,7 @@ load from same-origin URLs); apple-* meta tags cover iOS Add to Home Screen.
     --bg:#0a0f0d; --panel:#10171a; --panel2:#16201f; --line:#1f2e2a;
     --teal:#2dd4a8; --teal-dim:#1a8f73; --green:#9ef0c8; --text:#d7e6df;
     --muted:#6f8a80; --red:#ff6b6b; --amber:#ffc861;
+    --maroon:#660000; --gold:#BFA87C;   /* CofC accents — never primary */
     --safe-b:env(safe-area-inset-bottom,0px);
   }
   *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
@@ -31,18 +47,65 @@ load from same-origin URLs); apple-* meta tags cover iOS Add to Home Screen.
        font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
        display:flex;flex-direction:column;overflow:hidden}
 
+  /* ── shell: sidebar + content column ── */
+  #shell{display:flex;flex:1 1 auto;min-height:0}
+  #content{display:flex;flex-direction:column;flex:1 1 auto;min-width:0}
+
+  #sidebar{width:232px;flex:0 0 auto;background:var(--panel);
+           border-right:1px solid var(--line);padding:16px 10px 12px 0;
+           display:flex;flex-direction:column;overflow-y:auto}
+  .sb-brand{padding:2px 14px 12px 17px;border-bottom:1px solid var(--line);
+            margin-bottom:8px}
+  .sb-brand b{display:block;color:var(--green);letter-spacing:.24em;
+              font-size:17px;font-weight:600}
+  .sb-cofc{display:inline-block;margin-top:6px;background:var(--maroon);
+           color:var(--gold);font-size:10px;letter-spacing:.14em;
+           padding:2px 8px;border-radius:6px}
+  .sb-sec{font-size:10px;letter-spacing:.18em;color:var(--muted);
+          text-transform:uppercase;margin:12px 0 4px 17px}
+  .sb-item{display:flex;align-items:center;gap:10px;width:100%;text-align:left;
+           background:none;border:0;border-left:3px solid transparent;
+           color:var(--muted);padding:9px 12px 9px 14px;font-size:14px;
+           letter-spacing:.04em;border-radius:0 10px 10px 0;cursor:pointer}
+  .sb-item .ic{font-size:17px;width:22px;text-align:center}
+  .sb-item:hover{color:var(--text)}
+  .sb-item.on{color:var(--teal);background:var(--panel2);
+              border-left-color:var(--gold)}   /* gold accent bar */
+  .sb-soon{margin-left:auto;font-size:9px;letter-spacing:.1em;color:var(--muted);
+           border:1px solid var(--line);border-radius:5px;padding:1px 5px}
+
+  #scrim{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:15;display:none}
+
   header{padding:14px 18px 10px;border-bottom:1px solid var(--line);
          display:flex;align-items:center;gap:10px;flex:0 0 auto}
+  #menuBtn{display:none;background:none;border:0;color:var(--green);
+           font-size:22px;line-height:1;padding:2px 4px;cursor:pointer}
   .orb{width:12px;height:12px;border-radius:50%;background:var(--teal);
-       box-shadow:0 0 10px var(--teal);animation:pulse 2.4s infinite}
+       box-shadow:0 0 10px var(--teal);animation:pulse 2.4s infinite;flex:0 0 auto}
   .orb.down{background:var(--red);box-shadow:0 0 10px var(--red)}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
   header h1{font-size:18px;letter-spacing:.22em;color:var(--green);font-weight:600}
+  .hdr-title{color:var(--muted);font-size:12px;letter-spacing:.16em;
+             text-transform:uppercase;border-left:1px solid var(--line);
+             padding-left:10px}
   header small{color:var(--muted);margin-left:auto;font-size:11px;letter-spacing:.08em}
 
-  main{flex:1 1 auto;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:16px}
+  /* mobile: sidebar becomes a slide-in panel behind the hamburger */
+  @media (max-width:767px){
+    #menuBtn{display:block}
+    #sidebar{position:fixed;top:0;bottom:0;left:0;width:min(280px,82vw);
+             transform:translateX(-105%);transition:transform .22s ease;
+             z-index:20;box-shadow:8px 0 30px rgba(0,0,0,.5);
+             padding-bottom:calc(12px + var(--safe-b))}
+    #sidebar.open{transform:none}
+    #scrim.show{display:block}
+  }
+
+  main{flex:1 1 auto;overflow-y:auto;-webkit-overflow-scrolling:touch;
+       padding:16px;padding-bottom:calc(16px + var(--safe-b))}
   .view{display:none;max-width:680px;margin:0 auto}
   .view.active{display:block}
+  @media (min-width:1100px){ .view{max-width:900px} }
 
   .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;
         padding:14px 16px;margin-bottom:12px}
@@ -66,6 +129,11 @@ load from same-origin URLs); apple-* meta tags cover iOS Add to Home Screen.
   .qbox button{background:var(--teal);color:#06231b;border:0;border-radius:12px;
                padding:0 18px;font-size:15px;font-weight:700;letter-spacing:.04em}
   .qbox button:disabled{opacity:.5}
+  #micBtn{background:var(--panel2);color:var(--teal);border:1px solid var(--line);
+          font-size:17px;font-weight:400}
+  #micBtn.rec{background:var(--red);color:#fff;border-color:var(--red);
+              animation:pulse 1.2s infinite}
+  #micBtn:disabled{opacity:.4}
   .bubble-q{background:var(--panel2);border:1px solid var(--line);border-radius:12px 12px 12px 4px;
             padding:10px 14px;margin:10px 0 4px;color:var(--green);font-size:14px}
   .bubble-a{background:var(--panel);border:1px solid var(--line);border-radius:4px 12px 12px 12px;
@@ -74,16 +142,52 @@ load from same-origin URLs); apple-* meta tags cover iOS Add to Home Screen.
         border-top-color:var(--teal);border-radius:50%;animation:rot .8s linear infinite;vertical-align:-3px}
   @keyframes rot{to{transform:rotate(360deg)}}
 
-  nav{flex:0 0 auto;display:flex;border-top:1px solid var(--line);
-      background:var(--panel);padding-bottom:var(--safe-b)}
-  nav button{flex:1;background:none;border:0;color:var(--muted);padding:12px 0 10px;
-             font-size:11px;letter-spacing:.16em;font-weight:600}
-  nav button .ic{display:block;font-size:20px;margin-bottom:2px}
-  nav button.on{color:var(--teal)}
+  /* COMPLIANCE view */
+  .statgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:12px}
+  @media (min-width:768px){ .statgrid{grid-template-columns:repeat(4,1fr)} }
+  .statgrid .card{margin-bottom:0}
+  .filter{width:100%;background:var(--panel2);border:1px solid var(--line);
+          border-radius:12px;color:var(--text);padding:11px 14px;font-size:15px;
+          outline:none;margin-bottom:12px}
+  .filter:focus{border-color:var(--teal-dim)}
+  .tblwrap{max-height:62vh;overflow:auto;border:1px solid var(--line);
+           border-radius:12px;background:var(--panel)}
+  table.tbl{width:100%;border-collapse:collapse;font-size:13px;min-width:560px}
+  .tbl th{position:sticky;top:0;background:var(--panel2);color:var(--muted);
+          font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+          text-align:left;padding:9px 12px;border-bottom:1px solid var(--line)}
+  .tbl td{padding:8px 12px;border-bottom:1px solid var(--line);
+          white-space:nowrap;font-variant-numeric:tabular-nums}
+  .tbl tr:last-child td{border-bottom:0}
+  .st{font-size:11px;font-weight:600;letter-spacing:.06em;border-radius:6px;
+      padding:2px 7px;white-space:nowrap}
+  .st-compliant{color:var(--teal);background:rgba(45,212,168,.1)}
+  .st-non{color:var(--red);background:rgba(255,107,107,.12)}
+  .st-unknown{color:var(--muted);background:var(--panel2)}
+  .st-warn{color:var(--amber);background:rgba(255,200,97,.1)}
+
+  /* GATE view (Session 6) — decision buttons; approve is the only solid
+     fill, reject/changes are outlined so a misclick is harder */
+  .gbtns{display:flex;gap:8px;margin-top:12px}
+  .gbtn{flex:1;border:0;border-radius:10px;padding:10px 0;font-size:12px;
+        font-weight:700;letter-spacing:.08em;cursor:pointer}
+  .gbtn:disabled{opacity:.45}
+  .g-ok{background:var(--teal);color:#06231b}
+  .g-no{background:rgba(255,107,107,.14);color:var(--red);
+        border:1px solid rgba(255,107,107,.35)}
+  .g-ch{background:rgba(255,200,97,.12);color:var(--amber);
+        border:1px solid rgba(255,200,97,.35)}
+  /* sidebar pending-approvals badge — amber (alert, not branding), hidden
+     entirely when the queue is empty per the architecture plan */
+  .sb-badge{margin-left:auto;font-size:10px;font-weight:700;
+            color:var(--amber);background:rgba(255,200,97,.12);
+            border:1px solid rgba(255,200,97,.3);border-radius:8px;
+            padding:1px 7px;font-variant-numeric:tabular-nums}
+  .sb-badge[hidden]{display:none}
 
   /* key gate overlay */
   #gate{position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;
-        align-items:center;justify-content:center;gap:16px;padding:24px;z-index:10}
+        align-items:center;justify-content:center;gap:16px;padding:24px;z-index:30}
   #gate h1{color:var(--green);letter-spacing:.25em;font-size:22px}
   #gate p{color:var(--muted);font-size:14px;text-align:center;max-width:300px}
   #gate input{background:var(--panel2);border:1px solid var(--line);border-radius:12px;
@@ -105,45 +209,155 @@ load from same-origin URLs); apple-* meta tags cover iOS Add to Home Screen.
   <button onclick="unlock()">CONNECT</button>
 </div>
 
-<header>
-  <div class="orb" id="orb"></div>
-  <h1>JARVIS</h1>
-  <small id="hdrModel"></small>
-</header>
+<div id="shell">
 
-<main>
-  <!-- BRIEF -->
-  <section class="view active" id="view-brief">
-    <div class="stamp" id="briefStamp">loading briefing…</div>
-    <div id="briefCards"></div>
-  </section>
-
-  <!-- QUERY -->
-  <section class="view" id="view-query">
-    <div class="qbox">
-      <input id="qIn" placeholder="Ask JARVIS…" autocomplete="off"
-             onkeydown="if(event.key==='Enter')ask()">
-      <button id="qBtn" onclick="ask()">ASK</button>
+  <aside id="sidebar">
+    <div class="sb-brand">
+      <b>JARVIS</b>
+      <span class="sb-cofc">CofC&nbsp;IT&nbsp;OPS</span>
     </div>
-    <div id="qHist"></div>
-  </section>
+    <div class="sb-sec">Operations</div>
+    <button class="sb-item on" data-v="brief" onclick="tab('brief')"><span class="ic">☀️</span><span>Brief</span></button>
+    <button class="sb-item" data-v="query" onclick="tab('query')"><span class="ic">💬</span><span>Query</span></button>
+    <div class="sb-sec">Fleet</div>
+    <button class="sb-item" data-v="compliance" onclick="tab('compliance')"><span class="ic">✅</span><span>Compliance</span></button>
+    <button class="sb-item" data-v="lifecycle" onclick="tab('lifecycle')"><span class="ic">♻️</span><span>Lifecycle</span></button>
+    <button class="sb-item" data-v="gaps" onclick="tab('gaps')"><span class="ic">🧩</span><span>Coverage Gaps</span></button>
+    <div class="sb-sec">Security</div>
+    <button class="sb-item" data-v="threat" onclick="tab('threat')"><span class="ic">🛡️</span><span>Threat Intel</span></button>
+    <div class="sb-sec">System</div>
+    <button class="sb-item" data-v="gatequeue" onclick="tab('gatequeue')"><span class="ic">🔐</span><span>Gate</span><span class="sb-badge" id="gateBadge" hidden>0</span></button>
+    <button class="sb-item" data-v="status" onclick="tab('status')"><span class="ic">📡</span><span>Status</span></button>
+  </aside>
 
-  <!-- STATUS -->
-  <section class="view" id="view-status">
-    <div class="card">
-      <h2>System Status</h2>
-      <div id="statusBody"><span class="spin"></span> checking…</div>
-    </div>
-    <p class="note" style="text-align:center">BB · Ubuntu 24.04 · zero-egress ·
-       all inference on-box</p>
-  </section>
-</main>
+  <div id="content">
+    <header>
+      <button id="menuBtn" onclick="toggleMenu()" aria-label="Menu">☰</button>
+      <div class="orb" id="orb"></div>
+      <h1>JARVIS</h1>
+      <span class="hdr-title" id="hdrTitle">BRIEF</span>
+      <small id="hdrModel"></small>
+    </header>
 
-<nav>
-  <button class="on" data-v="brief" onclick="tab('brief')"><span class="ic">☀️</span>BRIEF</button>
-  <button data-v="query" onclick="tab('query')"><span class="ic">💬</span>QUERY</button>
-  <button data-v="status" onclick="tab('status')"><span class="ic">📡</span>STATUS</button>
-</nav>
+    <main>
+      <!-- BRIEF -->
+      <section class="view active" id="view-brief">
+        <div class="stamp" id="briefStamp">loading briefing…</div>
+        <div id="briefCards"></div>
+      </section>
+
+      <!-- QUERY -->
+      <section class="view" id="view-query">
+        <div class="qbox">
+          <input id="qIn" placeholder="Ask JARVIS…" autocomplete="off"
+                 onkeydown="if(event.key==='Enter')ask()">
+          <button id="micBtn" onclick="mic()" aria-label="Voice input">🎤</button>
+          <button id="qBtn" onclick="ask()">ASK</button>
+        </div>
+        <div id="qHist"></div>
+      </section>
+
+      <!-- COMPLIANCE (Session 3 — merge-engine backed) -->
+      <section class="view" id="view-compliance">
+        <div class="stamp" id="compStamp">loading fleet…</div>
+        <div id="compBody">
+          <div class="statgrid" id="compStats"></div>
+          <input class="filter" id="compSearch" placeholder="Filter by hostname…"
+                 autocomplete="off" oninput="renderCompliance()">
+          <div class="tblwrap">
+            <table class="tbl">
+              <thead><tr><th>Hostname</th><th>Platform</th><th>State</th>
+                     <th>Reason</th><th>Last seen</th></tr></thead>
+              <tbody id="compRows"></tbody>
+            </table>
+          </div>
+          <p class="note" id="compCount"></p>
+        </div>
+      </section>
+
+      <!-- LIFECYCLE (Session 4 — os_readiness engine over the merge) -->
+      <section class="view" id="view-lifecycle">
+        <div class="stamp" id="lcStamp">loading fleet…</div>
+        <div id="lcBody">
+          <div class="statgrid" id="lcStats"></div>
+          <input class="filter" id="lcSearch" placeholder="Filter by hostname…"
+                 autocomplete="off" oninput="renderLifecycle()">
+          <div class="tblwrap">
+            <table class="tbl">
+              <thead><tr><th>Hostname</th><th>Platform</th><th>OS version</th>
+                     <th>Status</th><th>Upgrade path</th><th>Age (d)</th>
+                     <th>Last seen</th></tr></thead>
+              <tbody id="lcRows"></tbody>
+            </table>
+          </div>
+          <p class="note" id="lcCount"></p>
+        </div>
+      </section>
+
+      <!-- COVERAGE GAPS (Session 5 — inventory-presence gaps over the merge) -->
+      <section class="view" id="view-gaps">
+        <div class="stamp" id="gapStamp">loading fleet…</div>
+        <div id="gapBody">
+          <div class="statgrid" id="gapStats"></div>
+          <div class="card"><h2>Known limitation</h2>
+            <p class="note" style="margin-top:0">Agent-coverage gap detection
+            (devices missing a Taegis/SentinelOne agent) requires a Taegis
+            inventory endpoint not yet available — tracked as a future
+            connector addition. Gaps below are derived from Intune + Jamf
+            inventory presence and check-in recency only.</p></div>
+          <input class="filter" id="gapSearch" placeholder="Filter by hostname…"
+                 autocomplete="off" oninput="renderGaps()">
+          <div class="tblwrap">
+            <table class="tbl">
+              <thead><tr><th>Hostname</th><th>Platform</th><th>Present in</th>
+                     <th>Gap</th><th>Last seen</th></tr></thead>
+              <tbody id="gapRows"></tbody>
+            </table>
+          </div>
+          <p class="note" id="gapCount"></p>
+        </div>
+      </section>
+
+      <!-- THREAT INTEL (Session 5 — Taegis alerts + investigations, direct
+           read from tools/taegis.py; NOT part of the device merge) -->
+      <section class="view" id="view-threat">
+        <div class="stamp" id="thStamp">loading alerts…</div>
+        <div id="thBody">
+          <div class="statgrid" id="thStats"></div>
+          <div class="tblwrap">
+            <table class="tbl">
+              <thead><tr><th>Alert</th><th>Severity</th><th>Host</th>
+                     <th>Time</th><th>Status</th></tr></thead>
+              <tbody id="thRows"></tbody>
+            </table>
+          </div>
+          <p class="note" id="thCount"></p>
+          <div class="card" style="margin-top:12px"><h2>Investigations</h2>
+            <div id="thInv"></div></div>
+        </div>
+      </section>
+
+      <!-- GATE (Session 6 — web front door to the Stage-4 approval gate;
+           same decision contract as the Teams-card /approve links) -->
+      <section class="view" id="view-gatequeue">
+        <div class="stamp" id="gateStamp">checking queue…</div>
+        <div id="gateList"></div>
+      </section>
+
+      <!-- STATUS -->
+      <section class="view" id="view-status">
+        <div class="card">
+          <h2>System Status</h2>
+          <div id="statusBody"><span class="spin"></span> checking…</div>
+        </div>
+        <p class="note" style="text-align:center">BB · Ubuntu 24.04 · zero-egress ·
+           all inference on-box</p>
+      </section>
+    </main>
+  </div>
+</div>
+
+<div id="scrim" onclick="toggleMenu(false)"></div>
 
 <script>
 "use strict";
@@ -184,13 +398,32 @@ const friendly = e =>
   e.status===502 ? "JARVIS core is offline — UI is up but inference isn't." :
                    "Something went wrong (" + e.status + ").";
 
-/* ── tabs ── */
+/* ── nav: same .view/tab() mechanism as the 3-tab version, now 8 views,
+       driven from the sidebar (desktop) / slide-in menu (mobile) ── */
+const PAGE_TITLES = {brief:"BRIEF", query:"QUERY", compliance:"COMPLIANCE",
+  lifecycle:"LIFECYCLE", gaps:"COVERAGE GAPS", threat:"THREAT INTEL",
+  gatequeue:"GATE", status:"STATUS"};
+
 function tab(name){
   document.querySelectorAll(".view").forEach(v=>v.classList.remove("active"));
   document.getElementById("view-"+name).classList.add("active");
-  document.querySelectorAll("nav button").forEach(b=>
+  document.querySelectorAll("#sidebar .sb-item").forEach(b=>
     b.classList.toggle("on", b.dataset.v===name));
+  document.getElementById("hdrTitle").textContent = PAGE_TITLES[name] || "";
+  toggleMenu(false);                       // mobile: navigating closes the menu
   if(name==="status") refreshStatus();
+  if(name==="compliance") refreshCompliance();
+  if(name==="lifecycle") refreshLifecycle();
+  if(name==="gaps") refreshGaps();
+  if(name==="threat") refreshThreat();
+  if(name==="gatequeue") refreshGate();
+}
+
+function toggleMenu(force){
+  const sb=document.getElementById("sidebar"), sc=document.getElementById("scrim");
+  const open = (force===undefined) ? !sb.classList.contains("open") : force;
+  sb.classList.toggle("open", open);
+  sc.classList.toggle("show", open);
 }
 
 /* ── BRIEF view ── */
@@ -259,6 +492,424 @@ async function ask(){
   item.pending=false; btn.disabled=false; renderHist();
 }
 
+/* ── COMPLIANCE view (Session 3) — one fetch; stat cards derive from the
+       same devices array the table renders, so they can never disagree ── */
+let compData=null;
+async function refreshCompliance(){
+  const stamp=document.getElementById("compStamp");
+  stamp.innerHTML='<span class="spin"></span> merging fleet…';
+  try{
+    compData = await api("/compliance");
+    stamp.textContent = "generated "
+      + new Date(compData.generated_at).toLocaleTimeString()
+      + (compData.mock ? " · mock data" : "")
+      + " · sources: " + (compData.sources_included||[]).join(", ");
+    renderCompliance();
+  }catch(e){
+    stamp.textContent="";
+    document.getElementById("compStats").innerHTML="";
+    document.getElementById("compRows").innerHTML=
+      `<tr><td colspan="5"><div class="err card" style="margin:0">${esc(friendly(e))}</div></td></tr>`;
+    document.getElementById("compCount").textContent="";
+  }
+}
+function renderCompliance(){
+  if(!compData) return;
+  const devs = compData.devices||[];
+  let comp=0, non=0, unk=0;
+  devs.forEach(d=>{
+    if(d.compliance_state==="compliant") comp++;
+    else if(d.compliance_state==="non-compliant") non++;
+    else unk++;
+  });
+  const known = comp+non;
+  const pct = known ? Math.round(comp/known*1000)/10 : 0;
+  document.getElementById("compStats").innerHTML =
+    `<div class="card"><h2>Devices</h2><div class="big">${devs.length}</div>
+       <div class="note">merged fleet</div></div>
+     <div class="card"><h2>Compliant</h2><div class="big">${pct}%</div>
+       <div class="note">of ${known} with a verdict</div></div>
+     <div class="card"><h2>Non-compliant</h2>
+       <div class="big ${non>0?"sev-high":""}">${non}</div>
+       <div class="note">Intune policy</div></div>
+     <div class="card"><h2>Unknown</h2><div class="big" style="color:var(--muted)">${unk}</div>
+       <div class="note">Jamf has no compliance flag</div></div>`;
+
+  const q = document.getElementById("compSearch").value.trim().toLowerCase();
+  const shown = q ? devs.filter(d=>(d.hostname||"").toLowerCase().includes(q)) : devs;
+  const stCls = s => s==="compliant" ? "st-compliant"
+                   : s==="non-compliant" ? "st-non" : "st-unknown";
+  document.getElementById("compRows").innerHTML = shown.map(d=>{
+    const reason = (d.intune && d.intune.non_compliance_reason) || "—";
+    const seen   = (d.intune && d.intune.last_sync)
+                || (d.jamf && d.jamf.last_checkin) || "";
+    const seenTxt = seen ? new Date(seen).toLocaleDateString() : "—";
+    return `<tr><td>${esc(d.hostname)}</td><td>${esc(d.platform)}</td>
+      <td><span class="st ${stCls(d.compliance_state)}">${esc(d.compliance_state)}</span></td>
+      <td>${esc(reason)}</td><td>${esc(seenTxt)}</td></tr>`;
+  }).join("") || `<tr><td colspan="5" class="note" style="padding:14px">No devices match.</td></tr>`;
+  document.getElementById("compCount").textContent =
+    `${shown.length} of ${devs.length} devices` + (q ? ` · filter: "${q}"` : "");
+}
+
+/* ── LIFECYCLE view (Session 4) — same one-fetch pattern as Compliance:
+       stat cards derive from the devices array the table renders ── */
+let lcData=null;
+async function refreshLifecycle(){
+  const stamp=document.getElementById("lcStamp");
+  stamp.innerHTML='<span class="spin"></span> assessing fleet…';
+  try{
+    lcData = await api("/lifecycle");
+    stamp.textContent = "generated "
+      + new Date(lcData.generated_at).toLocaleTimeString()
+      + (lcData.mock ? " · mock data" : "")
+      + " · sources: " + (lcData.sources_included||[]).join(", ");
+    renderLifecycle();
+  }catch(e){
+    stamp.textContent="";
+    document.getElementById("lcStats").innerHTML="";
+    document.getElementById("lcRows").innerHTML=
+      `<tr><td colspan="7"><div class="err card" style="margin:0">${esc(friendly(e))}</div></td></tr>`;
+    document.getElementById("lcCount").textContent="";
+  }
+}
+function renderLifecycle(){
+  if(!lcData) return;
+  const devs = lcData.devices||[];
+  const buckets = {"at-target":0,"upgradeable":0,"minimum":0,"eol-build":0,"unknown":0};
+  let blocked=0, win11blocked=0;
+  devs.forEach(d=>{
+    buckets[d.lifecycle_status] = (buckets[d.lifecycle_status]||0)+1;
+    if(d.readiness==="blocked"){ blocked++;
+      if(d.win11_eligible==="no (age)") win11blocked++; }
+  });
+  const needs = (buckets["upgradeable"]||0)+(buckets["minimum"]||0);
+  document.getElementById("lcStats").innerHTML =
+    `<div class="card"><h2>At target</h2><div class="big">${buckets["at-target"]||0}</div>
+       <div class="note">no upgrade needed</div></div>
+     <div class="card"><h2>Below target</h2>
+       <div class="big ${needs>0?"sev-medium":""}">${needs}</div>
+       <div class="note">upgradeable</div></div>
+     <div class="card"><h2>EOL builds</h2>
+       <div class="big ${buckets["eol-build"]>0?"sev-high":""}">${buckets["eol-build"]||0}</div>
+       <div class="note">${blocked} blocked (${win11blocked} by Win11 hw age)</div></div>
+     <div class="card"><h2>Unknown</h2><div class="big" style="color:var(--muted)">${buckets["unknown"]||0}</div>
+       <div class="note">platform / version unrecognized</div></div>`;
+
+  const q = document.getElementById("lcSearch").value.trim().toLowerCase();
+  const shown = q ? devs.filter(d=>(d.hostname||"").toLowerCase().includes(q)) : devs;
+  const stCls = s => s==="at-target" ? "st-compliant"
+                   : s==="eol-build" ? "st-non"
+                   : s==="unknown"   ? "st-unknown" : "st-warn";
+  document.getElementById("lcRows").innerHTML = shown.map(d=>{
+    const seen = (d.intune && d.intune.last_sync)
+              || (d.jamf && d.jamf.last_checkin) || "";
+    const seenTxt = seen ? new Date(seen).toLocaleDateString() : "—";
+    const age = (d.device_age_days ?? null) === null ? "—" : d.device_age_days;
+    return `<tr><td>${esc(d.hostname)}</td><td>${esc(d.platform)}</td>
+      <td>${esc(d.os_version||"—")}</td>
+      <td><span class="st ${stCls(d.lifecycle_status)}">${esc(d.lifecycle_status)}</span></td>
+      <td>${esc(d.upgrade_path||"—")}</td><td>${esc(age)}</td><td>${esc(seenTxt)}</td></tr>`;
+  }).join("") || `<tr><td colspan="7" class="note" style="padding:14px">No devices match.</td></tr>`;
+  document.getElementById("lcCount").textContent =
+    `${shown.length} of ${devs.length} devices` + (q ? ` · filter: "${q}"` : "");
+}
+
+/* ── COVERAGE GAPS view (Session 5) — same one-fetch pattern: gap labels
+       and stat cards derive from the same merged devices array, frontend-
+       side, per the "different view over the same merge data" rule.
+       Gap concepts are ONLY what Intune+Jamf inventory presence supports:
+       (1) enrollment gaps — platform's expected source missing from
+           sources_present (Mac not in Jamf / Windows not in Intune);
+       (2) silent devices — enrolled but not reporting: Jamf's connector-
+           computed last_checkin_stale flag, or Intune last_sync older than
+           the same 7-day window (mirrors jamf.py STALE_HOURS default).
+       Missing-Taegis-agent gaps are deliberately NOT here — no inventory
+       endpoint exists to power them (see the on-page limitation card). ── */
+const GAP_STALE_DAYS = 7;   // mirrors jamf.py STALE_HOURS default (168h)
+function deviceGaps(d){
+  const gaps=[], src=d.sources_present||[];
+  if(d.platform==="mac" && !src.includes("jamf"))
+    gaps.push("Mac not enrolled in Jamf");
+  if(d.platform==="windows" && !src.includes("intune"))
+    gaps.push("Windows not enrolled in Intune");
+  if(d.last_checkin_stale===true)
+    gaps.push("No Jamf check-in >"+GAP_STALE_DAYS+"d");
+  const sync = d.intune && d.intune.last_sync;
+  if(sync && (Date.now()-new Date(sync).getTime()) > GAP_STALE_DAYS*864e5)
+    gaps.push("No Intune sync >"+GAP_STALE_DAYS+"d");
+  return gaps;
+}
+let gapData=null;
+async function refreshGaps(){
+  const stamp=document.getElementById("gapStamp");
+  stamp.innerHTML='<span class="spin"></span> merging fleet…';
+  try{
+    gapData = await api("/coverage-gaps");
+    stamp.textContent = "generated "
+      + new Date(gapData.generated_at).toLocaleTimeString()
+      + (gapData.mock ? " · mock data" : "")
+      + " · sources: " + (gapData.sources_included||[]).join(", ");
+    renderGaps();
+  }catch(e){
+    stamp.textContent="";
+    document.getElementById("gapStats").innerHTML="";
+    document.getElementById("gapRows").innerHTML=
+      `<tr><td colspan="5"><div class="err card" style="margin:0">${esc(friendly(e))}</div></td></tr>`;
+    document.getElementById("gapCount").textContent="";
+  }
+}
+function renderGaps(){
+  if(!gapData) return;
+  const devs = gapData.devices||[];
+  let enroll=0, silent=0;
+  const flagged=[];
+  devs.forEach(d=>{
+    const gaps = deviceGaps(d);
+    if(!gaps.length) return;
+    flagged.push({d, gaps});
+    if(gaps.some(g=>g.includes("not enrolled"))) enroll++;
+    if(gaps.some(g=>g.startsWith("No "))) silent++;
+  });
+  document.getElementById("gapStats").innerHTML =
+    `<div class="card"><h2>With gaps</h2>
+       <div class="big ${flagged.length>0?"sev-high":""}">${flagged.length}</div>
+       <div class="note">of ${devs.length} devices</div></div>
+     <div class="card"><h2>Enrollment</h2>
+       <div class="big ${enroll>0?"sev-high":""}">${enroll}</div>
+       <div class="note">missing expected source</div></div>
+     <div class="card"><h2>Silent &gt;${GAP_STALE_DAYS}d</h2>
+       <div class="big ${silent>0?"sev-medium":""}">${silent}</div>
+       <div class="note">enrolled, not reporting</div></div>
+     <div class="card"><h2>Clean</h2>
+       <div class="big">${devs.length-flagged.length}</div>
+       <div class="note">no detected gap</div></div>`;
+
+  const q = document.getElementById("gapSearch").value.trim().toLowerCase();
+  const shown = q ? flagged.filter(f=>(f.d.hostname||"").toLowerCase().includes(q))
+                  : flagged;
+  document.getElementById("gapRows").innerHTML = shown.map(f=>{
+    const d=f.d;
+    const seen = (d.intune && d.intune.last_sync)
+              || (d.jamf && d.jamf.last_checkin) || "";
+    const seenTxt = seen ? new Date(seen).toLocaleDateString() : "—";
+    const gapHtml = f.gaps.map(g=>{
+      const cls = g.includes("not enrolled") ? "st-non" : "st-warn";
+      return `<span class="st ${cls}">${esc(g)}</span>`;
+    }).join(" ");
+    return `<tr><td>${esc(d.hostname)}</td><td>${esc(d.platform)}</td>
+      <td>${esc((d.sources_present||[]).join(" + "))}</td>
+      <td>${gapHtml}</td><td>${esc(seenTxt)}</td></tr>`;
+  }).join("") || `<tr><td colspan="5" class="note" style="padding:14px">${
+    q ? "No gapped devices match." : "No coverage gaps detected."}</td></tr>`;
+  document.getElementById("gapCount").textContent =
+    `${shown.length} of ${flagged.length} gapped devices`
+    + (q ? ` · filter: "${q}"` : "")
+    + ` · ${devs.length} total in merged inventory`;
+}
+
+/* ── THREAT INTEL view (Session 5) — reads /threat-intel (tools/taegis.py
+       direct). Stat cards use get_alerts()'s by_severity breakdown as-is;
+       the table preserves server order (already sorted most-severe-first
+       by the connector) — no client-side recount or re-sort. ── */
+const sevCls = s => s==="critical" ? "sev-critical"
+                  : s==="high"     ? "sev-high"
+                  : s==="medium"   ? "sev-medium" : "";
+let thData=null;
+async function refreshThreat(){
+  const stamp=document.getElementById("thStamp");
+  stamp.innerHTML='<span class="spin"></span> querying Taegis…';
+  try{
+    thData = await api("/threat-intel");
+    const a=thData.alerts||{};
+    stamp.textContent = "generated "
+      + new Date(thData.generated_at).toLocaleTimeString()
+      + (thData.mock ? " · mock data" : "")
+      + " · window: last " + (a.window_hours||"?") + "h";
+    renderThreat();
+  }catch(e){
+    stamp.textContent="";
+    document.getElementById("thStats").innerHTML="";
+    document.getElementById("thRows").innerHTML=
+      `<tr><td colspan="5"><div class="err card" style="margin:0">${esc(friendly(e))}</div></td></tr>`;
+    document.getElementById("thCount").textContent="";
+    document.getElementById("thInv").innerHTML="";
+  }
+}
+function renderThreat(){
+  if(!thData) return;
+  const a = thData.alerts||{}, counts = a.by_severity||{};
+  document.getElementById("thStats").innerHTML =
+    `<div class="card"><h2>Critical</h2>
+       <div class="big ${counts.critical>0?"sev-critical":""}">${counts.critical||0}</div>
+       <div class="note">last ${a.window_hours||"?"}h</div></div>
+     <div class="card"><h2>High</h2>
+       <div class="big ${counts.high>0?"sev-high":""}">${counts.high||0}</div>
+       <div class="note">last ${a.window_hours||"?"}h</div></div>
+     <div class="card"><h2>Medium</h2>
+       <div class="big ${counts.medium>0?"sev-medium":""}">${counts.medium||0}</div>
+       <div class="note">last ${a.window_hours||"?"}h</div></div>
+     <div class="card"><h2>Low</h2>
+       <div class="big" style="color:var(--muted)">${counts.low||0}</div>
+       <div class="note">last ${a.window_hours||"?"}h</div></div>`;
+
+  const rows = a.alerts||[];   // server order = most severe first, keep it
+  const fmtTs = t => t ? new Date(t).toLocaleString([],
+    {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}) : "—";
+  document.getElementById("thRows").innerHTML = rows.map(al=>
+    `<tr><td style="white-space:normal;min-width:240px">${esc(al.title)}</td>
+      <td><span class="${sevCls(al.severity)}">${esc(al.severity)}</span></td>
+      <td>${esc(al.host||"—")}</td><td>${esc(fmtTs(al.timestamp))}</td>
+      <td>${esc(al.status||"—")}</td></tr>`
+  ).join("") || `<tr><td colspan="5" class="note" style="padding:14px">No alerts in window.</td></tr>`;
+  document.getElementById("thCount").textContent =
+    `${rows.length} alerts · severity filter: ${a.severity_filter||"all"}`;
+
+  const inv = (thData.investigations||{}).investigations||[];
+  document.getElementById("thInv").innerHTML = inv.map(v=>
+    `<div class="row"><span class="k">${esc(v.short_id)}</span>
+       <span class="v"><span class="${sevCls(v.priority)}">${esc(v.priority)}</span>
+       · ${esc(v.status)} · opened ${esc(v.created_at
+         ? new Date(v.created_at).toLocaleDateString() : "—")}</span></div>
+     <div class="note" style="margin:0 0 10px">${esc(v.description)}</div>`
+  ).join("") || `<p class="note">No open investigations.</p>`;
+}
+
+/* ── GATE view (Session 6) — web front door to the Stage-4 approval gate.
+       /gate/pending lists runs waiting on a human; decisions POST to
+       /gate/decision (X-JARVIS-KEY auth; the run's one-time secret stays
+       server-side). Empty queue collapses to a single "nothing pending"
+       card per the architecture plan — no reserved table space. ── */
+let gateData=null;
+function updateGateBadge(n){
+  const b=document.getElementById("gateBadge");
+  b.textContent=n; b.hidden=!(n>0);
+}
+function fmtWait(s){
+  if(s==null) return "unknown";
+  if(s<60)   return s+"s";
+  if(s<3600) return Math.floor(s/60)+"m";
+  return Math.floor(s/3600)+"h "+Math.floor((s%3600)/60)+"m";
+}
+async function refreshGate(){
+  const stamp=document.getElementById("gateStamp");
+  stamp.innerHTML='<span class="spin"></span> checking queue…';
+  try{
+    gateData = await api("/gate/pending");
+    stamp.textContent = "checked "
+      + new Date(gateData.generated_at).toLocaleTimeString()
+      + (gateData.mock ? " · mock data" : "");
+    renderGate();
+  }catch(e){
+    stamp.textContent="";
+    document.getElementById("gateList").innerHTML=
+      `<div class="card err">${esc(friendly(e))}</div>`;
+  }
+}
+function renderGate(){
+  if(!gateData) return;
+  const p=gateData.pending||[];
+  updateGateBadge(p.length);
+  const el=document.getElementById("gateList");
+  if(!p.length){
+    el.innerHTML=`<div class="card"><h2>Approval Gate</h2>
+      <p class="note">Nothing pending — no pipeline runs are waiting at
+      Stage 4. Teams-card approval links keep working independently of
+      this page.</p></div>`;
+    return;
+  }
+  el.innerHTML = p.map(r=>{
+    const rid=esc(r.pipeline_run_id);
+    const late = gateData.timeout_seconds!=null
+      && r.waiting_seconds!=null && r.waiting_seconds>gateData.timeout_seconds;
+    return `<div class="card">
+      <h2>${esc(r.package_name)} ${esc(r.version)}</h2>
+      ${row("Platform", r.platform||"—")}
+      ${row("Test result", r.test_result,
+            r.confidence==="PASS" ? "" : "sev-high")}
+      ${row("Waiting", fmtWait(r.waiting_seconds), late?"sev-high":"")}
+      ${late?`<p class="note" style="color:var(--amber)">Waiting longer than
+        the Stage-4 timeout window (${Math.floor(gateData.timeout_seconds/60)}m)
+        — the pipeline may have stopped listening; a decision recorded now
+        might not be picked up.</p>`:""}
+      <div class="gbtns">
+        <button class="gbtn g-ok" onclick="gateDecide('${rid}','approved',this)">APPROVE</button>
+        <button class="gbtn g-no" onclick="gateDecide('${rid}','rejected',this)">REJECT</button>
+        <button class="gbtn g-ch" onclick="gateDecide('${rid}','changes_requested',this)">CHANGES</button>
+      </div>
+      <p class="note" id="gmsg-${rid}" style="display:none"></p>
+    </div>`;
+  }).join("");
+}
+async function gateDecide(runId, decision, btn){
+  const item=(gateData.pending||[]).find(r=>r.pipeline_run_id===runId)||{};
+  const nice=decision.replace("_"," ");
+  if(!confirm(`Record "${nice}" for ${item.package_name||"this run"} `
+              +`${item.version||""}?`.trim())) return;
+  const btns=btn.parentElement.querySelectorAll("button");
+  btns.forEach(b=>b.disabled=true);
+  try{
+    await api("/gate/decision",{method:"POST",
+      body:JSON.stringify({run_id:runId, decision})});
+    refreshGate();                     // decided run drops out of the queue
+  }catch(e){
+    const m=document.getElementById("gmsg-"+runId);
+    if(m){ m.style.display="block";
+      m.textContent = e.status===409
+        ? "Run is no longer awaiting a decision — refreshing."
+        : friendly(e); }
+    if(e.status===409){ refreshGate(); }
+    else { btns.forEach(b=>b.disabled=false); }
+  }
+}
+/* boot-time badge check so a pending approval is visible without opening
+   the Gate page; refreshed alongside the 5-min briefing cycle */
+async function pollGateBadge(){
+  try{ const g=await api("/gate/pending");
+       updateGateBadge(g.pending_count||0); }catch(_){}
+}
+
+/* ── QUERY mic (Session 6) — click-to-talk via the browser-native Web
+       Speech API, feeding the SAME ask() path as typed text. One utterance
+       per click; second click cancels. No backend involvement for the
+       speech-to-text step, and completely separate from the desktop app's
+       wake-word pipeline (voice_listener.py — untouched). Unsupported
+       browsers get a disabled button, not a silent failure. ── */
+const _SR = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+const _QIN_PLACEHOLDER = document.getElementById("qIn").placeholder;
+let _rec=null;
+function micSetup(){
+  const b=document.getElementById("micBtn");
+  if(!_SR){ b.disabled=true;
+    b.title="Voice input not supported in this browser"; return; }
+  b.title="Click and speak — one utterance, auto-submits";
+}
+function mic(){
+  const b=document.getElementById("micBtn");
+  if(!_SR || b.disabled) return;
+  if(_rec){ _rec.stop(); return; }     // second tap cancels
+  _rec=new _SR();
+  _rec.lang="en-US"; _rec.interimResults=false; _rec.maxAlternatives=1;
+  _rec.onresult=e=>{
+    const t=(e.results[0][0].transcript||"").trim();
+    if(t){ document.getElementById("qIn").value=t; ask(); }
+  };
+  _rec.onerror=e=>{
+    if(e.error==="no-speech"||e.error==="aborted") return;
+    const inp=document.getElementById("qIn");
+    inp.placeholder = e.error==="not-allowed"
+      ? "Microphone permission denied — type instead"
+      : "Voice input failed ("+e.error+") — type instead";
+    // restore to the load-time placeholder, never the current one — a
+    // second error while a message is showing must not make it permanent
+    setTimeout(()=>{ inp.placeholder=_QIN_PLACEHOLDER; }, 4000);
+  };
+  _rec.onend=()=>{ _rec=null; b.classList.remove("rec"); b.textContent="🎤"; };
+  b.classList.add("rec"); b.textContent="◼";
+  _rec.start();
+}
+micSetup();
+
 /* ── STATUS view + header orb ── */
 async function refreshStatus(){
   const el=document.getElementById("statusBody"), orb=document.getElementById("orb");
@@ -281,9 +932,9 @@ async function refreshStatus(){
 /* ── boot ── */
 let briefTimer=null;
 function boot(){
-  refreshBrief(); refreshStatus();
+  refreshBrief(); refreshStatus(); pollGateBadge();
   if(briefTimer)clearInterval(briefTimer);
-  briefTimer=setInterval(refreshBrief, 5*60*1000);   // auto-refresh 5 min
+  briefTimer=setInterval(()=>{refreshBrief(); pollGateBadge();}, 5*60*1000);
   setInterval(refreshStatus, 60*1000);
 }
 if(getKey()) boot();

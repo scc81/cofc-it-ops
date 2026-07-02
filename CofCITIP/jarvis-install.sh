@@ -292,13 +292,18 @@ fi
 # Heavy stack: tolerate partial failure so a headless/demo box with no audio
 # hardware still completes the install.
 echo; echo "── (d) Voice pipeline (OpenWakeWord + faster-whisper + GLaDOS)"
-if python3 -c "import openwakeword" &>/dev/null; then
-  skip "Voice pipeline python deps present"
+# openwakeword is PINNED to 0.6.0 — the pre-download below calls
+# openwakeword.utils.download_models(), which does not exist in older
+# releases (an unpinned install on BB produced AttributeError). The presence
+# check verifies the API, not just the import, so a stale install without
+# download_models gets reinstalled at the pin instead of skipped.
+if python3 -c "import openwakeword.utils, sys; sys.exit(0 if hasattr(openwakeword.utils, 'download_models') else 1)" &>/dev/null; then
+  skip "Voice pipeline python deps present (openwakeword API verified)"
 else
   # ffmpeg: faster-whisper audio decode. portaudio19-dev: pyaudio build dep.
   run apt-get install -y -qq portaudio19-dev ffmpeg
-  if run pip3 install --quiet --break-system-packages openwakeword pyaudio faster-whisper; then
-    ok "openwakeword + pyaudio + faster-whisper installed"
+  if run pip3 install --quiet --break-system-packages "openwakeword==0.6.0" pyaudio faster-whisper; then
+    ok "openwakeword 0.6.0 + pyaudio + faster-whisper installed"
   else
     warn "Voice deps partial failure — fine for headless/demo box; rerun on BB with audio hardware"
   fi
@@ -320,10 +325,12 @@ fi
 if [[ -d "$INSTALL_DIR/GlaDOS" ]]; then
   skip "GLaDOS source already present at $INSTALL_DIR/GlaDOS"
 else
-  # TODO: replace with the actual GLaDOS source repo URL used on BB before
-  # this runs on a real voice box. Left as a placeholder rather than a
-  # fabricated URL so a wrong clone target can't silently install.
-  GLADOS_REPO="https://example.invalid/REPLACE-WITH-ACTUAL-GLADOS-REPO.git"
+  # NOTE: dnhkng/GLaDOS is a FULL personality-core voice assistant
+  # (ASR/TTS/vision/MCP tools/autonomy loop), not a lightweight TTS library.
+  # Whether JARVIS pulls the whole stack or only the TTS voice model is an
+  # OPEN DECISION (phase4_bugs_followups.md) — the URL is correct, but do not
+  # let this clone/install step run on BB until that decision is made.
+  GLADOS_REPO="https://github.com/dnhkng/GLaDOS.git"
   if run git clone "$GLADOS_REPO" "$INSTALL_DIR/GlaDOS" \
      && run pip3 install --quiet --break-system-packages -e "$INSTALL_DIR/GlaDOS"; then
     run chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR/GlaDOS"
@@ -644,16 +651,17 @@ if [[ -f "$SRC_DIR/jarvis_core.py" ]]; then
   # AND seed_context.py) + tools/. Copy unconditionally so a git pull + rerun
   # actually updates the deployed code.
   run cp "$SRC_DIR/jarvis_core.py" "$INSTALL_DIR/"
-  # BUG 2: embedding.py is REQUIRED — jarvis_core.py and seed_context.py both
-  # `from embedding import get_embedding_function`. It was previously copied
-  # only via a `[[ -f ]] && cp` guard that silently skipped when missing,
-  # leaving a box where every /query crashed on import. Copy it unconditionally,
-  # then HARD-verify it landed; a missing embedder fails the install loudly.
-  run cp "$SRC_DIR/embedding.py" "$INSTALL_DIR/"
+  # embedding.py is REQUIRED — jarvis_core.py and seed_context.py both
+  # `from embedding import get_embedding_function` (flat import), but the file
+  # LIVES at tools/embedding.py in the repo. Copy it from there to the install
+  # root so the flat import resolves, then HARD-verify it landed; a missing
+  # embedder fails the install loudly (a prior `[[ -f ]] && cp` guard silently
+  # skipped it and left every /query crashing on import).
+  run cp "$SRC_DIR/tools/embedding.py" "$INSTALL_DIR/"
   if [[ "$DRY_RUN" != "true" ]] && [[ ! -f "$INSTALL_DIR/embedding.py" ]]; then
     fail "embedding.py did not deploy to $INSTALL_DIR — jarvis_core.py and \
 seed_context.py import it and will crash every /query without it. \
-Ensure embedding.py sits next to jarvis-install.sh and re-run."
+Ensure tools/embedding.py exists in the checkout next to jarvis-install.sh and re-run."
   fi
   ok "embedding.py deployed and verified at $INSTALL_DIR/embedding.py"
   [[ -f "$SRC_DIR/event_bus.py" ]]     && run cp "$SRC_DIR/event_bus.py" "$INSTALL_DIR/"

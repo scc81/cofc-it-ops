@@ -162,8 +162,8 @@ class TelemetryBridge(QObject):
 
     def _sample_gpu(self) -> None:
         if not self._nvml_ready or self._gpu_handle is None:
-            # Degraded path — keep GPU props pinned at 0 (set once; emit only on
-            # an actual change to avoid signal spam).
+            # Degraded path — GPU props report 0 but still emit each tick so
+            # chart consumers keep scrolling (a flat 0 line, honestly rendered).
             self._set_gpu_load(0.0)
             self._set_vram_pct(0.0)
             return
@@ -210,21 +210,26 @@ class TelemetryBridge(QObject):
         saturated = self._vram_pct > _VRAM_SATURATION_PCT
         self._set_cpu_spillover(bool(saturated and spiked))
 
-    # ── setters (emit NOTIFY only on change) ──────────────────────────────────
+    # ── setters ───────────────────────────────────────────────────────────────
+    # The three MEASURED metrics (gpuLoad, vramPct, cpuLoad) emit on EVERY poll
+    # tick, unconditionally. Consumers plotting time series (stress_panel.py)
+    # append one point per signal — change-gated emission froze the VRAM strip
+    # chart whenever NVML reported byte-identical usage across ticks (GPU/CPU
+    # values jitter every tick, so only VRAM ever hit the gate). A 1 Hz signal
+    # to a lightweight slot is negligible; a frozen chart is not.
+    # State-like properties (cpuSpillover, orbState, tokensPerSec, activeModel)
+    # keep emit-on-change: they are event edges, not samples.
     def _set_gpu_load(self, v: float) -> None:
-        if v != self._gpu_load:
-            self._gpu_load = v
-            self.gpuLoadChanged.emit()
+        self._gpu_load = v
+        self.gpuLoadChanged.emit()
 
     def _set_vram_pct(self, v: float) -> None:
-        if v != self._vram_pct:
-            self._vram_pct = v
-            self.vramPctChanged.emit()
+        self._vram_pct = v
+        self.vramPctChanged.emit()
 
     def _set_cpu_load(self, v: float) -> None:
-        if v != self._cpu_load:
-            self._cpu_load = v
-            self.cpuLoadChanged.emit()
+        self._cpu_load = v
+        self.cpuLoadChanged.emit()
 
     def _set_cpu_spillover(self, v: bool) -> None:
         if v != self._cpu_spillover:

@@ -36,6 +36,7 @@ Stage functions (all (params: dict) -> dict):
   request_approval(params)           Stage 4 — Teams card + BLOCKING wait
   production_deploy(params)          Stage 5 — token-gated phased rollout
   run_pipeline(params)               convenience driver, mock demos
+  list_pending_approvals(params)     read-only Stage-4 queue (web Gate page)
 
 Mock mode: JARVIS_MOCK=true or --mock on the CLI harness.
 """
@@ -158,6 +159,13 @@ class BuildParams(BaseModel):
         if v not in ("windows", "mac"):
             raise ValueError("platform must be 'windows' or 'mac'")
         return v
+
+
+class PendingParams(BaseModel):
+    # No parameters yet — exists so list_pending_approvals validates input
+    # like every other (params: dict) -> dict function, and so future
+    # filters (platform, age) have a place to land.
+    pass
 
 
 class RunIdParams(BaseModel):
@@ -462,6 +470,71 @@ def request_approval(raw_params: dict) -> dict:
             "teams_request_id": card.get("request_id")}
 
 
+def list_pending_approvals(raw_params: dict | None = None) -> dict:
+    """READ-ONLY listing of runs sitting at Stage 4 with no recorded decision
+    — the queue the web Gate page shows (Session 6). Lives here rather than
+    in jarvis_ui.py because this module already encapsulates the runs/
+    directory layout (_data_dir/_save_run/_load_run).
+
+    A run is "awaiting approval" when stage == 4 and its "approval" key is
+    absent (request_approval only sets it once a decision lands) or carries
+    no decision. Timed-out requests are NOT filtered out — request_approval
+    never writes an approval key on timeout, so they look identical to live
+    waits; timeout_seconds is included so callers can mark stale entries
+    honestly instead of this function guessing.
+
+    The per-run approval_secret is deliberately NOT part of the payload —
+    it must never leave the server."""
+    PendingParams(**(raw_params or {}))
+    log.info("tool.start", tool="list_pending_approvals", mock=MOCK_MODE)
+
+    now = datetime.now(timezone.utc)
+    pending = []
+    for rp in (_data_dir() / "runs").glob("*.json"):
+        try:
+            run = json.loads(rp.read_text(encoding="utf-8"))
+        except Exception:
+            continue  # unreadable run file — skip, same policy as health_check
+        if run.get("stage") != 4:
+            continue
+        if (run.get("approval") or {}).get("decision"):
+            continue  # already decided (approved/rejected/changes_requested)
+        cfg = run.get("draft_config") or {}
+        report = run.get("validation_report") or {}
+        requested_at = run.get("approval_requested_at") or ""
+        try:
+            waiting_s = max(0, int((now - datetime.fromisoformat(
+                requested_at)).total_seconds()))
+        except (ValueError, TypeError):
+            waiting_s = None
+        pending.append({
+            "pipeline_run_id": run.get("pipeline_run_id", rp.stem),
+            "package_name": cfg.get("app_name", "unknown"),
+            "version": cfg.get("version", ""),
+            "platform": cfg.get("platform", ""),
+            "test_result": (f"{report.get('install_result', '?')} / "
+                            f"{report.get('detection_result', '?')} / "
+                            f"confidence {report.get('confidence', '?')}"
+                            if report else "no validation report"),
+            "confidence": report.get("confidence"),
+            "approval_requested_at": requested_at,
+            "waiting_seconds": waiting_s,
+        })
+    pending.sort(key=lambda r: r.get("approval_requested_at") or "")
+
+    result = {
+        "source": "package_pipeline",
+        "mock": MOCK_MODE,
+        "generated_at": now.isoformat(),
+        "timeout_seconds": APPROVAL_TIMEOUT_SECONDS,
+        "pending_count": len(pending),
+        "pending": pending,
+    }
+    log.info("tool.success", tool="list_pending_approvals",
+             pending=len(pending))
+    return result
+
+
 # ── STAGE 5 — PRODUCTION DEPLOY (TOKEN-GATED) ─────────────────────────────────
 class _TokenInvalid(RuntimeError):
     pass
@@ -633,11 +706,17 @@ if __name__ == "__main__":
         "install_cmd": "npp.installer.exe /S",
     }))
     parser.add_argument("--mock", action="store_true")
+    parser.add_argument("--list-pending", action="store_true",
+                        help="print the Stage-4 pending-approval queue "
+                             "instead of running the pipeline")
     args = parser.parse_args()
 
     if args.mock:
         MOCK_MODE = True
         os.environ["JARVIS_MOCK"] = "true"
 
-    print(_json.dumps(run_pipeline(_json.loads(args.params)), indent=2,
-                      default=str))
+    if args.list_pending:
+        print(_json.dumps(list_pending_approvals({}), indent=2, default=str))
+    else:
+        print(_json.dumps(run_pipeline(_json.loads(args.params)), indent=2,
+                          default=str))
